@@ -1,0 +1,32 @@
+{
+  "name": "vali-storages",
+  "version": "1.1.5",
+  "description": "Esta librería ofrece una capa de abstracción sobre localStorage y sessionStorage, permitiéndote manejar datos de forma segura y flexible. Puedes optar por encriptar los items que almacenes, definir un tiempo de expiración para ellos, o alternar entre localStorage y sessionStorage según tus necesidades. Simplifica la gestión de almacenamiento web en tus aplicaciones JavaScript con esta poderosa herramienta.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=14.0.0",
+    "npm": ">=6.0.0"
+  },
+  "keywords": [
+    "localStorage",
+    "sessionStorage",
+    "encrypted",
+    "expiration",
+    "ts",
+    "js"
+  ],
+  "author": "Felipe Rafael MM <teabajo_ubf@hotmail.com> (https://fm-portafolio.netlify.app/)",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
