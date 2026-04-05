@@ -1,16 +1,14 @@
 import { TimeUnit } from "../enums/TimeUnit";
 
-export class TimeHelper{
+const MILLISECONDS_PER_UNIT: Record<TimeUnit, number> = {
+    [TimeUnit.SECONDS]:      1_000,
+    [TimeUnit.MINUTES]:     60_000,
+    [TimeUnit.HOURS]:    3_600_000,
+    [TimeUnit.DAYS]:    86_400_000,
+};
+
+export class TimeHelper {
     public static convertToMilliseconds(time: number, unit: TimeUnit): number {
-        switch (unit) {
-            case TimeUnit.HOURS:
-                return time * 60 * 60 * 1000; // Horas a milisegundos
-            case TimeUnit.MINUTES:
-                return time * 60 * 1000; // Minutos a milisegundos
-            case TimeUnit.DAYS:
-                return time * 24 * 60 * 60 * 1000; // Días a milisegundos
-            default:
-                return time; // Asume que el tiempo ya está en milisegundos si no se proporciona unidad
-        }
+        return (MILLISECONDS_PER_UNIT[unit] ?? 1) * time;
     }
 }

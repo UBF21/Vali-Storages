@@ -1,6 +1,7 @@
 import { AES } from "../enums/AES";
+import { ICrypto } from "../interfaces/ICrypto";
 
-export class Crypto {
+export class Crypto implements ICrypto {
     private key!: CryptoKey;
     private passphrase: string;
     private keySize: AES;
@@ -29,7 +30,11 @@ export class Crypto {
     private async deriveKey(passphrase: string): Promise<ArrayBuffer> {
         const encoder = new TextEncoder();
         const password = encoder.encode(passphrase);
-        const salt = crypto.getRandomValues(new Uint8Array(16)); // Sal aleatoria
+
+        // Sal determinista derivada de la passphrase para mantener consistencia entre sesiones
+        const passphraseBytes = encoder.encode(passphrase);
+        const salt = new Uint8Array(16);
+        salt.set(passphraseBytes.slice(0, 16));
 
         const keyMaterial = await crypto.subtle.importKey(
             "raw",
@@ -99,24 +104,12 @@ export class Crypto {
         return new TextDecoder().decode(decryptedData);
     }
 
-    // Utilidad para convertir un ArrayBuffer a Base64
-    private arrayBufferToBase64(buffer: ArrayBuffer): string {
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        for (const byte of bytes) {
-            binary += String.fromCharCode(byte);
-        }
-        return window.btoa(binary);
+    private arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
+        const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+        return btoa(Array.from(bytes, b => String.fromCharCode(b)).join(''));
     }
 
-    // Utilidad para convertir Base64 a un ArrayBuffer
     private base64ToArrayBuffer(base64: string): ArrayBuffer {
-        const binary = window.atob(base64);
-        const len = binary.length;
-        const buffer = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-            buffer[i] = binary.charCodeAt(i);
-        }
-        return buffer.buffer;
+        return Uint8Array.from(atob(base64), c => c.charCodeAt(0)).buffer as ArrayBuffer;
     }
 }

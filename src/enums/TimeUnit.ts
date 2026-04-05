@@ -1,5 +1,6 @@
 export enum TimeUnit{
-    HOURS = 'hours',
+    SECONDS = 'seconds',
     MINUTES = 'minutes',
+    HOURS = 'hours',
     DAYS = 'days'
 }
