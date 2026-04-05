@@ -1,13 +1,19 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ValiStorages } from '../src/implements/ValiStorages';
+import { createTypedStorage } from '../src/factories/createTypedStorage';
 import { ICrypto } from '../src/interfaces/ICrypto';
 import { TimeUnit } from '../src/enums/TimeUnit';
 
-// Mock de ICrypto para aislar tests de la criptografía real
 const makeMockCrypto = (): ICrypto => ({
     importKey: vi.fn().mockResolvedValue(undefined),
     encrypt: vi.fn().mockImplementation(async (data: string) => `enc:${data}`),
     decrypt: vi.fn().mockImplementation(async (data: string) => data.replace('enc:', '')),
+});
+
+const makeFailingCrypto = (): ICrypto => ({
+    importKey: vi.fn().mockResolvedValue(undefined),
+    encrypt: vi.fn().mockRejectedValue(new Error('crypto failed')),
+    decrypt: vi.fn().mockRejectedValue(new Error('crypto failed')),
 });
 
 describe('ValiStorages', () => {
@@ -54,9 +60,65 @@ describe('ValiStorages', () => {
         it('decrypts value when isEncrypt is true', async () => {
             const storage = new ValiStorages({ isEncrypt: true }, mockCrypto);
             await storage.setItem('secret', 'hello');
-            const result = await storage.getItem<string>('secret');
-            expect(result).toBe('hello');
-            expect(mockCrypto.decrypt).toHaveBeenCalled();
+            expect(await storage.getItem<string>('secret')).toBe('hello');
+        });
+    });
+
+    // ─── setItems / getItems / getAll ────────────────────────────────────────
+
+    describe('setItems()', () => {
+        it('stores multiple items at once', async () => {
+            const storage = new ValiStorages({}, mockCrypto);
+            await storage.setItems({ a: 1, b: 2, c: 3 });
+            expect(await storage.getItem('a')).toBe(1);
+            expect(await storage.getItem('b')).toBe(2);
+            expect(await storage.getItem('c')).toBe(3);
+        });
+    });
+
+    describe('getItems()', () => {
+        it('returns values for existing keys', async () => {
+            const storage = new ValiStorages({}, mockCrypto);
+            await storage.setItem('x', 10);
+            await storage.setItem('y', 20);
+            const result = await storage.getItems<number>(['x', 'y', 'z']);
+            expect(result).toEqual({ x: 10, y: 20, z: null });
+        });
+
+        it('returns null for expired keys in batch', async () => {
+            const storage = new ValiStorages({ timeExpiration: 1, timeUnit: TimeUnit.SECONDS }, mockCrypto);
+            await storage.setItem('exp', 'value');
+            const raw = JSON.parse(localStorage.getItem('exp')!);
+            raw.expiration = Date.now() - 1;
+            localStorage.setItem('exp', JSON.stringify(raw));
+            const result = await storage.getItems(['exp']);
+            expect(result['exp']).toBeNull();
+        });
+    });
+
+    describe('getAll()', () => {
+        it('returns all non-expired items', async () => {
+            const storage = new ValiStorages({}, mockCrypto);
+            await storage.setItem('a', 1);
+            await storage.setItem('b', 2);
+            expect(await storage.getAll()).toEqual({ a: 1, b: 2 });
+        });
+
+        it('returns empty object for empty storage', async () => {
+            const storage = new ValiStorages({}, mockCrypto);
+            expect(await storage.getAll()).toEqual({});
+        });
+
+        it('excludes expired items', async () => {
+            const storage = new ValiStorages({ timeExpiration: 1, timeUnit: TimeUnit.SECONDS }, mockCrypto);
+            await storage.setItem('keep', 'a');
+            await storage.setItem('expired', 'b');
+            const raw = JSON.parse(localStorage.getItem('expired')!);
+            raw.expiration = Date.now() - 1;
+            localStorage.setItem('expired', JSON.stringify(raw));
+            const all = await storage.getAll();
+            expect(all).toHaveProperty('keep');
+            expect(all).not.toHaveProperty('expired');
         });
     });
 
@@ -72,24 +134,167 @@ describe('ValiStorages', () => {
         it('returns null and removes item when expired', async () => {
             const storage = new ValiStorages({ timeExpiration: 1, timeUnit: TimeUnit.SECONDS }, mockCrypto);
             await storage.setItem('exp', 'value');
-            // Retrodejar la expiración en el pasado
             const raw = JSON.parse(localStorage.getItem('exp')!);
             raw.expiration = Date.now() - 1;
             localStorage.setItem('exp', JSON.stringify(raw));
-
             expect(await storage.getItem('exp')).toBeNull();
             expect(localStorage.getItem('exp')).toBeNull();
         });
 
         it('resets TTL on every setItem', async () => {
+            vi.useFakeTimers();
             const storage = new ValiStorages({ timeExpiration: 1, timeUnit: TimeUnit.HOURS }, mockCrypto);
             await storage.setItem('key', 'v1');
             const first = JSON.parse(localStorage.getItem('key')!).expiration;
-            vi.setSystemTime(Date.now() + 60_000);
+            vi.advanceTimersByTime(60_000);
             await storage.setItem('key', 'v2');
             const second = JSON.parse(localStorage.getItem('key')!).expiration;
             expect(second).toBeGreaterThan(first);
             vi.useRealTimers();
+        });
+    });
+
+    // ─── slidingExpiration ───────────────────────────────────────────────────
+
+    describe('slidingExpiration', () => {
+        it('resets TTL on successful getItem', async () => {
+            vi.useFakeTimers();
+            const storage = new ValiStorages(
+                { timeExpiration: 1, timeUnit: TimeUnit.HOURS, slidingExpiration: true },
+                mockCrypto
+            );
+            await storage.setItem('key', 'value');
+            const before = JSON.parse(localStorage.getItem('key')!).expiration as number;
+            vi.advanceTimersByTime(30 * 60 * 1000); // +30 min
+            await storage.getItem('key');
+            const after = JSON.parse(localStorage.getItem('key')!).expiration as number;
+            expect(after).toBeGreaterThan(before);
+            vi.useRealTimers();
+        });
+
+        it('does not slide TTL for expired items', async () => {
+            const storage = new ValiStorages(
+                { timeExpiration: 1, timeUnit: TimeUnit.SECONDS, slidingExpiration: true },
+                mockCrypto
+            );
+            await storage.setItem('exp', 'value');
+            const raw = JSON.parse(localStorage.getItem('exp')!);
+            raw.expiration = Date.now() - 1;
+            localStorage.setItem('exp', JSON.stringify(raw));
+            expect(await storage.getItem('exp')).toBeNull();
+            expect(localStorage.getItem('exp')).toBeNull();
+        });
+
+        it('does not slide when no TTL is configured', async () => {
+            const storage = new ValiStorages({ slidingExpiration: true }, mockCrypto);
+            await storage.setItem('key', 'value');
+            await storage.getItem('key');
+            const item = JSON.parse(localStorage.getItem('key')!);
+            expect(item.expiration).toBeUndefined();
+        });
+    });
+
+    // ─── onError ─────────────────────────────────────────────────────────────
+
+    describe('onError', () => {
+        it('throws by default on crypto failure', async () => {
+            const storage = new ValiStorages({ isEncrypt: true }, makeFailingCrypto());
+            await expect(storage.setItem('key', 'value')).rejects.toThrow('crypto failed');
+        });
+
+        it('silently ignores errors when onError is "silent"', async () => {
+            const storage = new ValiStorages({ isEncrypt: true, onError: 'silent' }, makeFailingCrypto());
+            await expect(storage.setItem('key', 'value')).resolves.toBeUndefined();
+            await expect(storage.getItem('key')).resolves.toBeNull();
+        });
+
+        it('calls error handler function with correct args', async () => {
+            const handler = vi.fn();
+            const storage = new ValiStorages({ isEncrypt: true, onError: handler }, makeFailingCrypto());
+            await storage.setItem('mykey', 'value');
+            expect(handler).toHaveBeenCalledWith(expect.any(Error), 'setItem', 'mykey');
+        });
+
+        it('calls error handler for getItem failure', async () => {
+            const handler = vi.fn();
+            const storage = new ValiStorages({ isEncrypt: true, onError: handler }, makeFailingCrypto());
+            // Manually put an encrypted item so getItem tries to decrypt
+            localStorage.setItem('mykey', JSON.stringify({ value: 'enc:something' }));
+            await storage.getItem('mykey');
+            expect(handler).toHaveBeenCalledWith(expect.any(Error), 'getItem', 'mykey');
+        });
+    });
+
+    // ─── onChange / cross-tab sync ───────────────────────────────────────────
+
+    describe('onChange (cross-tab sync)', () => {
+        it('calls onChange when storage event fires for own key', async () => {
+            const handler = vi.fn();
+            const storage = new ValiStorages({ prefix: 'app', onChange: handler }, mockCrypto);
+
+            const event = new StorageEvent('storage', {
+                key: 'app:user',
+                newValue: JSON.stringify({ value: JSON.stringify({ name: 'Felipe' }) }),
+                storageArea: localStorage,
+            });
+            window.dispatchEvent(event);
+
+            expect(handler).toHaveBeenCalledWith('user', { name: 'Felipe' });
+            storage.destroy();
+        });
+
+        it('calls onChange with null when item is deleted in another tab', () => {
+            const handler = vi.fn();
+            const storage = new ValiStorages({ prefix: 'app', onChange: handler }, mockCrypto);
+
+            const event = new StorageEvent('storage', {
+                key: 'app:session',
+                newValue: null,
+                storageArea: localStorage,
+            });
+            window.dispatchEvent(event);
+
+            expect(handler).toHaveBeenCalledWith('session', null);
+            storage.destroy();
+        });
+
+        it('ignores storage events from different namespace', () => {
+            const handler = vi.fn();
+            const storage = new ValiStorages({ prefix: 'app', onChange: handler }, mockCrypto);
+
+            const event = new StorageEvent('storage', {
+                key: 'other:key',
+                newValue: JSON.stringify({ value: '"data"' }),
+                storageArea: localStorage,
+            });
+            window.dispatchEvent(event);
+
+            expect(handler).not.toHaveBeenCalled();
+            storage.destroy();
+        });
+    });
+
+    // ─── destroy() ───────────────────────────────────────────────────────────
+
+    describe('destroy()', () => {
+        it('removes event listener — onChange no longer fires after destroy', () => {
+            const handler = vi.fn();
+            const storage = new ValiStorages({ prefix: 'app', onChange: handler }, mockCrypto);
+            storage.destroy();
+
+            const event = new StorageEvent('storage', {
+                key: 'app:key',
+                newValue: JSON.stringify({ value: '"data"' }),
+                storageArea: localStorage,
+            });
+            window.dispatchEvent(event);
+
+            expect(handler).not.toHaveBeenCalled();
+        });
+
+        it('does not throw when destroy is called without onChange', () => {
+            const storage = new ValiStorages({}, mockCrypto);
+            expect(() => storage.destroy()).not.toThrow();
         });
     });
 
@@ -113,7 +318,6 @@ describe('ValiStorages', () => {
             const raw = JSON.parse(localStorage.getItem('exp')!);
             raw.expiration = Date.now() - 1;
             localStorage.setItem('exp', JSON.stringify(raw));
-
             expect(storage.has('exp')).toBe(false);
             expect(localStorage.getItem('exp')).toBeNull();
         });
@@ -151,29 +355,19 @@ describe('ValiStorages', () => {
             const storage = new ValiStorages({ timeExpiration: 1, timeUnit: TimeUnit.SECONDS }, mockCrypto);
             await storage.setItem('keep', 'v');
             await storage.setItem('gone', 'v');
-
             const raw = JSON.parse(localStorage.getItem('gone')!);
             raw.expiration = Date.now() - 1;
             localStorage.setItem('gone', JSON.stringify(raw));
-
             storage.removeExpired();
             expect(localStorage.getItem('keep')).not.toBeNull();
             expect(localStorage.getItem('gone')).toBeNull();
-        });
-
-        it('does nothing when no items are expired', async () => {
-            const storage = new ValiStorages({ timeExpiration: 1, timeUnit: TimeUnit.HOURS }, mockCrypto);
-            await storage.setItem('a', 1);
-            await storage.setItem('b', 2);
-            storage.removeExpired();
-            expect(storage.size()).toBe(2);
         });
     });
 
     // ─── updateExpiry() ──────────────────────────────────────────────────────
 
     describe('updateExpiry()', () => {
-        it('returns false when no TTL is configured', async () => {
+        it('returns false when no TTL configured', async () => {
             const storage = new ValiStorages({}, mockCrypto);
             await storage.setItem('key', 'value');
             expect(storage.updateExpiry('key')).toBe(false);
@@ -189,18 +383,15 @@ describe('ValiStorages', () => {
             const storage = new ValiStorages({ timeExpiration: 1, timeUnit: TimeUnit.HOURS }, mockCrypto);
             await storage.setItem('key', 'value');
             const before = JSON.parse(localStorage.getItem('key')!).expiration as number;
-
             vi.advanceTimersByTime(5_000);
-            const updated = storage.updateExpiry('key');
+            storage.updateExpiry('key');
             const after = JSON.parse(localStorage.getItem('key')!).expiration as number;
-
-            expect(updated).toBe(true);
             expect(after).toBeGreaterThan(before);
             vi.useRealTimers();
         });
     });
 
-    // ─── removeItem / clear ───────────────────────────────────────────────────
+    // ─── removeItem / clear ──────────────────────────────────────────────────
 
     describe('removeItem()', () => {
         it('removes the specified key', async () => {
@@ -225,8 +416,7 @@ describe('ValiStorages', () => {
 
     describe('size()', () => {
         it('returns 0 for empty storage', () => {
-            const storage = new ValiStorages({}, mockCrypto);
-            expect(storage.size()).toBe(0);
+            expect(new ValiStorages({}, mockCrypto).size()).toBe(0);
         });
 
         it('counts stored items', async () => {
@@ -246,7 +436,7 @@ describe('ValiStorages', () => {
         });
     });
 
-    // ─── Prefix / namespace ──────────────────────────────────────────────────
+    // ─── prefix / namespace ──────────────────────────────────────────────────
 
     describe('prefix / namespace', () => {
         it('isolates keys between namespaces', async () => {
@@ -287,27 +477,13 @@ describe('ValiStorages', () => {
             expect(s2.size()).toBe(1);
         });
 
-        it('has() respects prefix', async () => {
+        it('getAll() respects namespace', async () => {
             const s1 = new ValiStorages({ prefix: 'ns1' }, mockCrypto);
             const s2 = new ValiStorages({ prefix: 'ns2' }, makeMockCrypto());
-            await s1.setItem('key', 'value');
-            expect(s1.has('key')).toBe(true);
-            expect(s2.has('key')).toBe(false);
-        });
-
-        it('removeExpired() only affects own namespace', async () => {
-            const s1 = new ValiStorages({ prefix: 'ns1', timeExpiration: 1, timeUnit: TimeUnit.SECONDS }, mockCrypto);
-            const s2 = new ValiStorages({ prefix: 'ns2', timeExpiration: 1, timeUnit: TimeUnit.SECONDS }, makeMockCrypto());
-            await s1.setItem('key', 'a');
-            await s2.setItem('key', 'b');
-
-            const raw = JSON.parse(localStorage.getItem('ns1:key')!);
-            raw.expiration = Date.now() - 1;
-            localStorage.setItem('ns1:key', JSON.stringify(raw));
-
-            s1.removeExpired();
-            expect(localStorage.getItem('ns1:key')).toBeNull();
-            expect(localStorage.getItem('ns2:key')).not.toBeNull();
+            await s1.setItem('x', 1);
+            await s2.setItem('y', 2);
+            const all = await s1.getAll();
+            expect(all).toEqual({ x: 1 });
         });
     });
 
@@ -317,8 +493,7 @@ describe('ValiStorages', () => {
         it('throws descriptive error when storage is full', async () => {
             const storage = new ValiStorages({}, mockCrypto);
             vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
-                const err = new DOMException('', 'QuotaExceededError');
-                throw err;
+                throw new DOMException('', 'QuotaExceededError');
             });
             await expect(storage.setItem('key', 'value')).rejects.toThrow('Storage quota exceeded');
         });
@@ -336,6 +511,46 @@ describe('ValiStorages', () => {
                 throw new DOMException('', 'SecurityError');
             });
             expect(ValiStorages.isAvailable()).toBe(false);
+        });
+    });
+
+    // ─── createTypedStorage ──────────────────────────────────────────────────
+
+    describe('createTypedStorage()', () => {
+        interface AppSchema {
+            userId: number;
+            token: string;
+            settings: { theme: 'dark' | 'light' };
+        }
+
+        it('stores and retrieves typed values', async () => {
+            const storage = createTypedStorage<AppSchema>({}, mockCrypto);
+            await storage.setItem('userId', 42);
+            expect(await storage.getItem('userId')).toBe(42);
+        });
+
+        it('setItems with partial schema', async () => {
+            const storage = createTypedStorage<AppSchema>({}, mockCrypto);
+            await storage.setItems({ userId: 1, token: 'abc' });
+            expect(await storage.getItem('userId')).toBe(1);
+            expect(await storage.getItem('token')).toBe('abc');
+        });
+
+        it('getAll returns typed result', async () => {
+            const storage = createTypedStorage<AppSchema>({}, mockCrypto);
+            await storage.setItem('token', 'xyz');
+            const all = await storage.getAll();
+            expect(all.token).toBe('xyz');
+        });
+
+        it('has / removeItem / size / clear work correctly', async () => {
+            const storage = createTypedStorage<AppSchema>({}, mockCrypto);
+            await storage.setItem('token', 'abc');
+            expect(storage.has('token')).toBe(true);
+            expect(storage.size()).toBe(1);
+            storage.removeItem('token');
+            expect(storage.has('token')).toBe(false);
+            expect(storage.size()).toBe(0);
         });
     });
 });

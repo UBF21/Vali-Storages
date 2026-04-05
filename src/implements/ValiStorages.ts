@@ -5,17 +5,21 @@ import { TimeHelper } from "../helpers/TimeHelper";
 import { ICrypto } from "../interfaces/ICrypto";
 import { IStoredItem } from "../interfaces/IStoredItem";
 import { IValiStorages } from "../interfaces/IValiStorages";
-import { IValiStoragesConfig } from "../interfaces/IValiStoragesConfig";
+import { ErrorHandler, IValiStoragesConfig } from "../interfaces/IValiStoragesConfig";
 
 export class ValiStorages implements IValiStorages {
     private cryptoInstance: ICrypto;
     private isEncrypt: boolean;
     private timeExpiration?: number;
     private timeUnit?: TimeUnit;
+    private slidingExpiration: boolean;
     private initialized: boolean = false;
     private initializationPromise: Promise<void>;
     private storage: Storage;
     private prefix: string;
+    private errorHandler: ErrorHandler;
+    private onChange?: (key: string, newValue: unknown | null) => void;
+    private crossTabListener?: (event: StorageEvent) => void;
 
     constructor(
         {
@@ -26,6 +30,9 @@ export class ValiStorages implements IValiStorages {
             timeUnit,
             useSessionStorage = false,
             prefix = "",
+            slidingExpiration = false,
+            onError = "throw",
+            onChange,
         }: IValiStoragesConfig = {},
         cryptoInstance?: ICrypto
     ) {
@@ -34,8 +41,12 @@ export class ValiStorages implements IValiStorages {
         this.isEncrypt = isEncrypt;
         this.timeExpiration = timeExpiration;
         this.timeUnit = timeUnit;
+        this.slidingExpiration = slidingExpiration;
         this.prefix = prefix;
+        this.errorHandler = onError;
+        this.onChange = onChange;
         this.initializationPromise = this.initializeCrypto();
+        if (onChange) this.setupCrossTabSync();
     }
 
     // ─── Static helpers ───────────────────────────────────────────────────────
@@ -80,13 +91,18 @@ export class ValiStorages implements IValiStorages {
         return this.prefix ? `${this.prefix}:${key}` : key;
     }
 
+    private unprefixedKey(rawKey: string): string | null {
+        if (!this.prefix) return rawKey;
+        const ns = `${this.prefix}:`;
+        if (!rawKey.startsWith(ns)) return null;
+        return rawKey.slice(ns.length);
+    }
+
     private ownKeys(): string[] {
         const all = Object.keys(this.storage);
         if (!this.prefix) return all;
         const ns = `${this.prefix}:`;
-        return all
-            .filter(k => k.startsWith(ns))
-            .map(k => k.slice(ns.length));
+        return all.filter(k => k.startsWith(ns)).map(k => k.slice(ns.length));
     }
 
     // ─── Initialization ───────────────────────────────────────────────────────
@@ -106,25 +122,127 @@ export class ValiStorages implements IValiStorages {
         }
     }
 
+    // ─── Cross-tab sync ───────────────────────────────────────────────────────
+
+    private setupCrossTabSync(): void {
+        if (typeof window === "undefined") return;
+        this.crossTabListener = (event: StorageEvent) => {
+            if (event.storageArea !== this.storage || event.key === null) return;
+            const key = this.unprefixedKey(event.key);
+            if (key === null) return;
+
+            if (event.newValue === null) {
+                this.onChange!(key, null);
+                return;
+            }
+
+            try {
+                const { value }: IStoredItem = JSON.parse(event.newValue);
+                if (!this.isEncrypt) {
+                    this.onChange!(key, JSON.parse(value));
+                    return;
+                }
+                this.ensureInitialized().then(() => {
+                    this.cryptoInstance
+                        .decrypt(value)
+                        .then(decrypted => this.onChange!(key, JSON.parse(decrypted)))
+                        .catch(() => this.onChange!(key, null));
+                });
+            } catch {
+                this.onChange!(key, null);
+            }
+        };
+        window.addEventListener("storage", this.crossTabListener);
+    }
+
+    destroy(): void {
+        if (this.crossTabListener) {
+            window.removeEventListener("storage", this.crossTabListener);
+            this.crossTabListener = undefined;
+        }
+    }
+
+    // ─── Error handling ───────────────────────────────────────────────────────
+
+    private handleError(error: unknown, operation: string, key?: string): void {
+        const err = error instanceof Error ? error : new Error(String(error));
+        if (this.errorHandler === "throw") throw err;
+        if (this.errorHandler === "silent") return;
+        this.errorHandler(err, operation, key);
+    }
+
     // ─── Public API ───────────────────────────────────────────────────────────
 
     async setItem<T>(key: string, value: T): Promise<void> {
-        await this.ensureInitialized();
-        await this.handleSetItem(key, value);
+        try {
+            await this.ensureInitialized();
+            await this.handleSetItem(key, value);
+        } catch (error) {
+            this.handleError(error, "setItem", key);
+        }
+    }
+
+    async setItems<T>(items: Record<string, T>): Promise<void> {
+        try {
+            await this.ensureInitialized();
+            await Promise.all(Object.entries(items).map(([k, v]) => this.handleSetItem(k, v)));
+        } catch (error) {
+            this.handleError(error, "setItems");
+        }
     }
 
     async getItem<T>(key: string): Promise<T | null> {
-        await this.ensureInitialized();
-        return this.handleGetItem<T>(key);
+        try {
+            await this.ensureInitialized();
+            return await this.handleGetItem<T>(key);
+        } catch (error) {
+            this.handleError(error, "getItem", key);
+            return null;
+        }
+    }
+
+    async getItems<T>(keys: string[]): Promise<Record<string, T | null>> {
+        try {
+            await this.ensureInitialized();
+            const entries = await Promise.all(
+                keys.map(async key => [key, await this.handleGetItem<T>(key)] as const)
+            );
+            return Object.fromEntries(entries);
+        } catch (error) {
+            this.handleError(error, "getItems");
+            return {};
+        }
+    }
+
+    async getAll<T = unknown>(): Promise<Record<string, T>> {
+        try {
+            await this.ensureInitialized();
+            const result: Record<string, T> = {};
+            await Promise.all(
+                this.ownKeys().map(async key => {
+                    const value = await this.handleGetItem<T>(key);
+                    if (value !== null) result[key] = value;
+                })
+            );
+            return result;
+        } catch (error) {
+            this.handleError(error, "getAll");
+            return {};
+        }
     }
 
     async getOrSet<T>(key: string, factory: () => T | Promise<T>): Promise<T> {
-        await this.ensureInitialized();
-        const existing = await this.handleGetItem<T>(key);
-        if (existing !== null) return existing;
-        const value = await factory();
-        await this.handleSetItem(key, value);
-        return value;
+        try {
+            await this.ensureInitialized();
+            const existing = await this.handleGetItem<T>(key);
+            if (existing !== null) return existing;
+            const value = await factory();
+            await this.handleSetItem(key, value);
+            return value;
+        } catch (error) {
+            this.handleError(error, "getOrSet", key);
+            throw error;
+        }
     }
 
     has(key: string): boolean {
@@ -218,11 +336,17 @@ export class ValiStorages implements IValiStorages {
         const itemStr = this.storage.getItem(this.prefixedKey(key));
         if (!itemStr) return null;
 
-        const { value, expiration }: IStoredItem = JSON.parse(itemStr);
+        const item: IStoredItem = JSON.parse(itemStr);
+        const { value, expiration } = item;
 
         if (expiration && Date.now() > expiration) {
             this.storage.removeItem(this.prefixedKey(key));
             return null;
+        }
+
+        if (this.slidingExpiration && this.timeExpiration && this.timeUnit && expiration !== undefined) {
+            item.expiration = Date.now() + TimeHelper.convertToMilliseconds(this.timeExpiration, this.timeUnit);
+            this.safeStorageSet(this.prefixedKey(key), JSON.stringify(item));
         }
 
         const decodedValue = this.isEncrypt
