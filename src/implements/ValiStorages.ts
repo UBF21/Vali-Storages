@@ -8,7 +8,7 @@ import { IValiStorages } from "../interfaces/IValiStorages";
 import { ErrorHandler, IValiStoragesConfig } from "../interfaces/IValiStoragesConfig";
 
 export class ValiStorages implements IValiStorages {
-    private cryptoInstance: ICrypto;
+    private cryptoInstance: ICrypto | null;
     private isEncrypt: boolean;
     private timeExpiration?: number;
     private timeUnit?: TimeUnit;
@@ -36,7 +36,7 @@ export class ValiStorages implements IValiStorages {
         cryptoInstance?: ICrypto
     ) {
         this.storage = ValiStorages.resolveStorage(useSessionStorage);
-        this.cryptoInstance = cryptoInstance ?? (isEncrypt ? new Crypto(predefinedKey, keySize) : null!);
+        this.cryptoInstance = cryptoInstance ?? (isEncrypt ? new Crypto(predefinedKey, keySize) : null);
         this.isEncrypt = isEncrypt;
         this.timeExpiration = timeExpiration;
         this.timeUnit = timeUnit;
@@ -108,7 +108,7 @@ export class ValiStorages implements IValiStorages {
 
     private async initializeCrypto(): Promise<void> {
         try {
-            await this.cryptoInstance.importKey();
+            await this.cryptoInstance!.importKey();
         } catch (error) {
             throw new Error(
                 `Vali-Storages: crypto initialization failed. ` +
@@ -142,8 +142,13 @@ export class ValiStorages implements IValiStorages {
                     this.onChange!(key, JSON.parse(item.value));
                     return;
                 }
+                if (!this.cryptoInstance) {
+                    this.onChange!(key, null);
+                    return;
+                }
+                const crypto = this.cryptoInstance;
                 this.ensureInitialized().then(() => {
-                    this.cryptoInstance
+                    crypto
                         .decrypt(item.value)
                         .then(decrypted => this.onChange!(key, JSON.parse(decrypted)))
                         .catch(() => this.onChange!(key, null));
@@ -290,7 +295,7 @@ export class ValiStorages implements IValiStorages {
             const item: IStoredItem = JSON.parse(itemStr);
             if (!this.expirationMs) return false;
             item.expiration = Date.now() + this.expirationMs;
-            this.storage.setItem(rawKey, JSON.stringify(item));
+            this.safeStorageSet(rawKey, JSON.stringify(item));
             return true;
         } catch {
             return false;
@@ -342,7 +347,7 @@ export class ValiStorages implements IValiStorages {
 
         const data: IStoredItem = {
             value: this.isEncrypt
-                ? await this.cryptoInstance.encrypt(JSON.stringify(value))
+                ? await this.cryptoInstance!.encrypt(JSON.stringify(value))
                 : JSON.stringify(value),
             expiration,
             encrypted: this.isEncrypt,
@@ -369,7 +374,7 @@ export class ValiStorages implements IValiStorages {
         }
 
         const decodedValue = item.encrypted
-            ? await this.cryptoInstance.decrypt(value)
+            ? await this.cryptoInstance!.decrypt(value)
             : value;
 
         return JSON.parse(decodedValue) as T;
