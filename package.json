@@ -19,7 +19,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/UBF21/Vali-Storages.git"
+    "url": "https://github.com/UBF21/Vali-Storages"
   },
   "keywords": [
     "localStorage",
@@ -38,8 +38,12 @@
     "browser-storage",
     "typescript"
   ],
-  "author": "Felipe Rafael MM <teabajo_ubf@hotmail.com> (https://fm-portafolio.netlify.app/)",
+  "author": "Felipe Rafael Montenegro Morriberon <teabajo_ubf@hotmail.com> (https://fm-portafolio.netlify.app/)",
   "license": "MIT",
+  "homepage": "https://vali-storages-docs.netlify.app/",
+  "bugs": {
+    "url": "https://github.com/UBF21/Vali-Storages/issues"
+  },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.2",
     "happy-dom": "^20.8.9",

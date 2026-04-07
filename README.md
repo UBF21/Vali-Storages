@@ -4,8 +4,9 @@ TypeScript library for browser storage management with **AES-GCM encryption**, *
 
 [![npm version](https://img.shields.io/npm/v/vali-storages)](https://www.npmjs.com/package/vali-storages)
 [![license](https://img.shields.io/npm/l/vali-storages)](LICENSE)
+[![docs](https://img.shields.io/badge/docs-vali--storages-2563EB)](https://vali-storages-docs.netlify.app/)
 
-> 📖 **Documentation:** [English](docs/en/getting-started.md) · [Español](docs/es/getting-started.md)
+> 📖 **Documentation:** [vali-storages-docs.netlify.app](https://vali-storages-docs.netlify.app/) · [English](https://vali-storages-docs.netlify.app/docs/getting-started) · [Español](https://vali-storages-docs.netlify.app/es/docs/getting-started)
 
 ---
 

@@ -16,5 +16,5 @@ export interface IValiStoragesConfig {
     prefix?: string;
     slidingExpiration?: boolean;
     onError?: ErrorHandler;
-    onChange?: (key: string, newValue: unknown | null) => void;
+    onChange?: (key: string, newValue: unknown) => void;
 }

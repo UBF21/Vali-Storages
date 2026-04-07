@@ -31,10 +31,17 @@ export class Crypto implements ICrypto {
         const encoder = new TextEncoder();
         const password = encoder.encode(passphrase);
 
-        // Sal determinista derivada de la passphrase para mantener consistencia entre sesiones
+        // NOTE: The salt is deterministically derived from the passphrase so that
+        // the same key can be reproduced across sessions without persisting the salt.
+        // This is an intentional trade-off: it weakens PBKDF2's rainbow-table
+        // resistance but is acceptable here because the passphrase itself is the
+        // shared secret. Use a strong, unique predefinedKey to compensate.
         const passphraseBytes = encoder.encode(passphrase);
         const salt = new Uint8Array(16);
-        salt.set(passphraseBytes.slice(0, 16));
+        salt.set(passphraseBytes.slice(0, 14));
+        // Los últimos 2 bytes codifican la longitud total de la passphrase
+        salt[14] = (passphraseBytes.length >> 8) & 0xff;
+        salt[15] = passphraseBytes.length & 0xff;
 
         const keyMaterial = await crypto.subtle.importKey(
             "raw",
