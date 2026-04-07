@@ -110,11 +110,27 @@ ValiStorages.isAvailable()    // boolean — check storage availability
 
 ---
 
+## Changelog
+
+### v2.1.0
+- Internal: cross-tab sync extracted to `CrossTabSync` class (SRP) — no public API changes
+- Fix: `updateExpiry` uses `safeStorageSet` for consistent quota-exceeded handling
+- Fix: `cryptoInstance` properly typed as `ICrypto | null`; all access sites guarded
+- Fix: cross-tab decrypt path returns `null` instead of throwing when instance has no crypto
+
+### v2.0.0 (Breaking)
+- `setItem` / `getItem` are now `async` — add `await` to all calls
+- `getItem` no longer uses a callback — returns `Promise<T | null>`
+- Added: `setItems`, `getItems`, `getAll`, `getOrSet`, `has`, `removeExpired`, `updateExpiry`, `size`, `prefix`, `slidingExpiration`, `onError`, `onChange`, `createTypedStorage`, `ValiStorages.isAvailable`, `destroy`
+
+---
+
 ## Documentation
 
-- [Getting Started](docs/en/getting-started.md)
-- [API Reference](docs/en/api-reference.md)
-- [Migration from v1.x](docs/en/migration.md)
+- [Getting Started](https://vali-storages-docs.netlify.app/docs/getting-started)
+- [API Reference](https://vali-storages-docs.netlify.app/docs/api-reference)
+- [Migration from v1.x](https://vali-storages-docs.netlify.app/docs/migration)
+- [Changelog](https://vali-storages-docs.netlify.app/docs/changelog)
 
 ---
 
