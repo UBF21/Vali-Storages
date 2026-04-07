@@ -6,6 +6,7 @@ import { ICrypto } from "../interfaces/ICrypto";
 import { IStoredItem } from "../interfaces/IStoredItem";
 import { IValiStorages } from "../interfaces/IValiStorages";
 import { ErrorHandler, IValiStoragesConfig } from "../interfaces/IValiStoragesConfig";
+import { CrossTabSync } from "../sync/CrossTabSync";
 
 export class ValiStorages implements IValiStorages {
     private cryptoInstance: ICrypto | null;
@@ -17,8 +18,7 @@ export class ValiStorages implements IValiStorages {
     private storage: Storage;
     private prefix: string;
     private errorHandler: ErrorHandler;
-    private onChange?: (key: string, newValue: unknown) => void;
-    private crossTabListener?: (event: StorageEvent) => void;
+    private crossTabSync?: CrossTabSync;
 
     constructor(
         {
@@ -43,9 +43,16 @@ export class ValiStorages implements IValiStorages {
         this.slidingExpiration = slidingExpiration;
         this.prefix = prefix;
         this.errorHandler = onError;
-        this.onChange = onChange;
         this.initializationPromise = isEncrypt ? this.initializeCrypto() : Promise.resolve();
-        if (onChange) this.setupCrossTabSync();
+        if (onChange) {
+            this.crossTabSync = new CrossTabSync({
+                storage: this.storage,
+                prefix,
+                onChange,
+                cryptoInstance: this.cryptoInstance,
+                ensureInitialized: () => this.ensureInitialized(),
+            });
+        }
     }
 
     // ─── Static helpers ───────────────────────────────────────────────────────
@@ -90,13 +97,6 @@ export class ValiStorages implements IValiStorages {
         return this.prefix ? `${this.prefix}:${key}` : key;
     }
 
-    private unprefixedKey(rawKey: string): string | null {
-        if (!this.prefix) return rawKey;
-        const ns = `${this.prefix}:`;
-        if (!rawKey.startsWith(ns)) return null;
-        return rawKey.slice(ns.length);
-    }
-
     private ownKeys(): string[] {
         const all = Object.keys(this.storage);
         if (!this.prefix) return all;
@@ -122,49 +122,9 @@ export class ValiStorages implements IValiStorages {
         await this.initializationPromise;
     }
 
-    // ─── Cross-tab sync ───────────────────────────────────────────────────────
-
-    private setupCrossTabSync(): void {
-        if (typeof window === "undefined") return;
-        this.crossTabListener = (event: StorageEvent) => {
-            if (event.storageArea !== this.storage || event.key === null) return;
-            const key = this.unprefixedKey(event.key);
-            if (key === null) return;
-
-            if (event.newValue === null) {
-                this.onChange!(key, null);
-                return;
-            }
-
-            try {
-                const item: IStoredItem = JSON.parse(event.newValue);
-                if (!item.encrypted) {
-                    this.onChange!(key, JSON.parse(item.value));
-                    return;
-                }
-                if (!this.cryptoInstance) {
-                    this.onChange!(key, null);
-                    return;
-                }
-                const crypto = this.cryptoInstance;
-                this.ensureInitialized().then(() => {
-                    crypto
-                        .decrypt(item.value)
-                        .then(decrypted => this.onChange!(key, JSON.parse(decrypted)))
-                        .catch(() => this.onChange!(key, null));
-                });
-            } catch {
-                this.onChange!(key, null);
-            }
-        };
-        window.addEventListener("storage", this.crossTabListener);
-    }
-
     destroy(): void {
-        if (this.crossTabListener) {
-            window.removeEventListener("storage", this.crossTabListener);
-            this.crossTabListener = undefined;
-        }
+        this.crossTabSync?.destroy();
+        this.crossTabSync = undefined;
     }
 
     // ─── Error handling ───────────────────────────────────────────────────────
